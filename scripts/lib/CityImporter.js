@@ -1,4 +1,7 @@
-import {loading, capitalize} from "../Utils.js";
+import { loading, capitalize } from "../Utils.js";
+import { testData } from "../../resources/Taylensea-for-FVTT.js";
+import { testRoadData } from "../../resources/Taylensea-roads.js";
+
 
 const decodeHTML = (rawText) => {
     const txt = document.createElement("textarea");
@@ -8,7 +11,7 @@ const decodeHTML = (rawText) => {
 
 const prepareText = (rawText) => {
     const decoded = decodeHTML(rawText);
-    const $a = $('<div />', {html: decoded});
+    const $a = $('<div />', { html: decoded });
     const located = $a.find('.link-internal');
     located.replaceWith((index, text) => {
         // let id = located[index]?.parentElement?.parentElement?.className.replace('tip', '') ||
@@ -65,7 +68,7 @@ const parseSecAttributes = (NPCsAsActors, folderId, loadingBar, hasCustomNPCLoca
     async (primaryAttribute, attributeType, createActor, createJournal) => {
         let folder, NPCFolder;
         if (!(hasCustomNPCLocation[0] && attributeType === 'NPCs'))
-            folder = await Folder.create({name: capitalize(attributeType), type: 'JournalEntry', parent: folderId});
+            folder = await Folder.create({ name: capitalize(attributeType), type: 'JournalEntry', parent: folderId });
 
         if (NPCsAsActors && attributeType === 'NPCs' && !hasCustomNPCLocation[1])
             NPCFolder = await Folder.create({
@@ -76,10 +79,12 @@ const parseSecAttributes = (NPCsAsActors, folderId, loadingBar, hasCustomNPCLoca
 
         for (const secAttribute in primaryAttribute) {
             if (!primaryAttribute.hasOwnProperty(secAttribute)) continue;
+
             loadingBar();
 
             if (NPCsAsActors && attributeType === 'NPCs')
                 await createActor(primaryAttribute[secAttribute], hasCustomNPCLocation[1] ? location[1] : NPCFolder.data._id);
+
             await createJournal(primaryAttribute[secAttribute], hasCustomNPCLocation[0] && attributeType === 'NPCs' ? location[0] : folder.data._id);
         }
     }
@@ -163,12 +168,177 @@ const getTownSize = (jsonData) => {
     return townSize;
 }
 
-const createCity = async (rawText, NPCsAsActors, hasCustomNPCLocation, location) => {
-    const jsonData = JSON.parse(rawText);
+const prepareTownData = async (jsonData, townName, loadingBar, jsonRoadData = {}) => {
+
+    loadingBar();
+
+    let mainJournalId = "1001";
+    /* create town object from start and town text */
+    let townData = {
+        "town": {
+            ["1001"]: {
+                output: jsonData.start + "/n" + jsonData.town,
+                name: townName,
+                key: "1001"
+            }
+        }
+    };
+
+    /* merge jsons */
+    if (Object.keys(jsonRoadData["roads"]).length !== 0) {
+        let roadData = {
+            "roads": {
+
+            }
+        };
+        Object.keys(jsonRoadData["roads"]).forEach(key => {
+            roadData["roads"][key] = {
+                output: jsonRoadData["roads"][key].description + jsonRoadData["roads"][key].features,
+                name: jsonRoadData["roads"][key].name,
+                key: jsonRoadData["roads"][key].key
+            }
+
+        });
+        mergeObject(jsonData, roadData);
+
+    }
+    mergeObject(jsonData, townData);
+    delete jsonData.start;
+
+    const flatData = {};
+
+    /* flatten the json to make key lookup easier */
+    Object.keys(jsonData).forEach(cat => {
+        if (Object.hasOwn(jsonData, cat)) {
+            Object.assign(flatData, jsonData[cat]);
+        }
+    });
+
+    /* create compendium pack if it doesn't exist */
+    let compendium = game.packs.get(`world.${townName}`);
+    if (!compendium) {
+        compendium = await CompendiumCollection.createCompendium({ name: townName, label: townName, type: "JournalEntry" });
+    }
+
+    const parser = new DOMParser();
+    const newData = [];
+    const originalData = [];
+
+    /* loop through each place/npc/deity etc */
+    Object.keys(flatData).forEach(key => {
+
+        loadingBar();
+
+
+
+        const html = parser.parseFromString(flatData[key].output, "text/html");
+        const elements = $(html).find(".link-internal");
+        const eeegLinks = [];
+
+        for (const el of elements) {
+            if (el.dataset.objectType === undefined) continue;
+
+            eeegLinks.push(el.dataset.id);
+
+            /* if the found link is not in the flatData we need to add it */
+            if (!Object.keys(flatData).includes(el.dataset.id)) {
+                let id = el.dataset.id;
+                let newEntry = {
+                    [id]: {
+                        name: el.innerText,
+                        key: el.dataset.id,
+                        output: el.title,
+                        type: el.dataset.objectType
+                    }
+                }
+                Object.assign(flatData, newEntry);
+
+                let journal = {
+                    content: newEntry[id].output,
+                    name: newEntry[id].name,
+                    flags: {
+                        "EEEG-Importer": {
+                            "compendiumEntry": compendium.collection,
+                            "id": newEntry[id].key,
+                            "links": [],
+                        }
+                    }
+                };
+                newData.push(journal);
+            }
+
+            $(el).text(`...@Compendium[${compendium.collection}.${el.dataset.id}]`);
+            // $(el).append(`@Compendium[${compendium.collection}.${el.dataset.id}]`);
+            el.dataset.id = `@Compendium[${compendium.collection}.${el.dataset.id}]`;
+        }
+
+        let content = html.body.innerHTML;
+
+        let journal = {
+            content: content,
+            name: flatData[key].name,
+            flags: {
+                "EEEG-Importer": {
+                    "compendiumEntry": compendium.collection,
+                    "id": flatData[key].key,
+                    "links": eeegLinks,
+                }
+            }
+        };
+        originalData.push(journal);
+    });
+
+    /* now we have all the objects lets turn them into journal entries */
+    let allData = originalData.concat(newData);
+    const newEntries = await JournalEntry.createDocuments(allData, { pack: compendium.collection });
+
+    for (let entry of newEntries) {
+
+        const eeegId = entry.getFlag("EEEG-Importer", "id");
+        flatData[eeegId].foundryLink = entry.id;
+    }
+
+    let updates = [];
+    for (let entry of newEntries) {
+        loadingBar();
+
+        let content = entry.data.content;
+        const links = entry.getFlag("EEEG-Importer", "links");
+        for (const link of links) {
+            const linkRegex = new RegExp(link, 'g');
+            let fvttLink = flatData[link].foundryLink;
+            content = content.replace(linkRegex, fvttLink);
+        }
+
+        updates.push({ content: content, _id: entry.id });
+    };
+    await JournalEntry.updateDocuments(updates, { pack: compendium.collection });
+
+    mainJournalId = flatData[mainJournalId].foundryLink;
+    game.journal.importFromCompendium(compendium, mainJournalId);
+    ui.notifications.info("Your city has been imported successfully RWK");
+}
+
+const createCity = async (rawText, NPCsAsActors, NPCsAsCompendia, hasCustomNPCLocation, location, rawRoadText) => {
+
+    let i = [];
+    const comp = game.packs.get(`world.Taylensea`);
+    if (comp)
+        await comp.delete();
+
+    if (rawRoadText.length === 0) rawRoadText = '{}';
+
+    // const jsonData = JSON.parse(rawText);
+    const jsonData = testData;
+    // const jsonRoadData = JSON.parse(rawRoadText);
+    // const jsonRoadData = testRoadData;
     const loadingBar = loading('Importing city.')(0)(getTownSize(jsonData) - 1);
     const townName = getTownName(jsonData);
 
-    const mainFolder = await Folder.create({name: townName, type: 'JournalEntry', parent: null});
+    // if (NPCsAsCompendia) {
+    //     prepareTownData(jsonData, townName, loadingBar, jsonRoadData);
+    // } else {
+    const mainFolder = await Folder.create({ name: townName, type: 'JournalEntry', parent: null });
     const secAttrParser = parseSecAttributes(NPCsAsActors, mainFolder.data._id, loadingBar, hasCustomNPCLocation, location);
 
     const ids = await iterateJson(jsonData, townName, mainFolder.data._id, NPCsAsActors, loadingBar, secAttrParser);
@@ -176,8 +346,9 @@ const createCity = async (rawText, NPCsAsActors, hasCustomNPCLocation, location)
 
     await secondPassJournals(ids[0], loadingBar);
     if (NPCsAsActors) await secondPassActors(ids[1]);
+    // }
 
     ui.notifications.info("Your city has been imported successfully");
 }
 
-export {createCity}
+export { createCity }

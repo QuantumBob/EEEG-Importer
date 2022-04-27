@@ -1,31 +1,48 @@
 <div>
     <div class="importWindowDiv">
         <p>
-            Insert the JSON exported by EEEG into the text field below.
+            <b>Insert the JSON exported by EEEG into the text field below.</b>
         </p>
-        <p>
-            You can find the generator <a href="https://eigengrausgenerator.com/">here</a>.
-        </p>
+        <hr>
+        <p>NPCs will be imported to journals or compendiums</p>
+        <p>If you want Actors to be created for each NPC too select that checkbox</p>
     </div>
-    <div class="selectorDiv importWindowDiv">
+    <div class="importWindowDiv">
+        <input type="radio" id="NPCsJournals" name="NPCsLocation" value="Journals"/>
+        <label for="NPCsActors" class="inputDescriptor"> Import NPCs to journals: </label>
+        <br>
+        <input type="radio" id="NPCsCompendiiums" name="NPCsLocation" value="Compendiums" checked/>
+        <label for="NPCsActors" class="inputDescriptor"> Import NPCs to a compendium: </label>
+    </div>
+    <div class="importWindowDiv">
+        <input type="checkbox" id="NPCsActors" name="NPCsActors" value="Actors" disabled/>
         <label for="NPCsActors" class="inputDescriptor"> Import NPCs as actors: </label>
-        <input type="checkbox" id="NPCsActors" name="NPCsActors" value="Actors"/>
     </div>
     <div id="customLocationDiv" class="selectorDiv importWindowDiv">
-        <label for="customLocation" class="inputDescriptor">Target folder for NPCs: </label>
+        <label for="customLocation" class="inputDescriptor">Folder for NPC's journals: </label>
         <select name="customLocation" id="customLocation" class="locationsSelect">
             <option value="default"> Default </option>
             <option value="null"> Main Page </option>
         </select>
     </div>
     <div id="customLocationDivActors" class="selectorDiv importWindowDiv">
-        <label for="customLocationActor" class="inputDescriptor">Target folder for actors: </label>
+        <label for="customLocationActor" class="inputDescriptor">Folder for NPC's actors: </label>
         <select name="customLocation" id="customLocationActor" class="locationsSelect">
             <option value="default"> Default </option>
             <option value="null"> Main Page </option>
         </select>
     </div>
-    <div class="inputDescriptor importWindowDiv">Import text</div>
+    <div class="inputDescriptor importWindowDiv">
+        <b>Paste Main JSON text here</b>
+    </div>
     <textarea class="text-input" name="text" style="white-space: pre-wrap" id="text-input"></textarea>
+    <div class="inputDescriptor importWindowDiv">
+        <b>Paste Road JSON text here</b>
+    </div>
+    <textarea class="text-input" name="roads" style="white-space: pre-wrap" id="road-text-input"></textarea>
     <button id="submit"> Import! </button>
+    <hr>
+    <p>
+        You can find the generator <a href="https://eigengrausgenerator.com/">here</a>.
+    </p>
 </div>
