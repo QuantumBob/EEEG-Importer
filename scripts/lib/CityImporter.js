@@ -2,6 +2,7 @@ import { loading, capitalize } from "../Utils.js";
 import { testData } from "../../resources/Taylensea-for-FVTT.js";
 import { testRoadData } from "../../resources/Taylensea-roads.js";
 
+let mainJournalId;
 
 const decodeHTML = (rawText) => {
     const txt = document.createElement("textarea");
@@ -9,21 +10,24 @@ const decodeHTML = (rawText) => {
     return txt.value;
 }
 
-const prepareText = (rawText) => {
+const prepareText = (rawText, pack = false) => {
     const decoded = decodeHTML(rawText);
     const $a = $('<div />', { html: decoded });
     const located = $a.find('.link-internal');
-    located.replaceWith((index, text) => {
-        // let id = located[index]?.parentElement?.parentElement?.className.replace('tip', '') ||
-        //     located[index]?.parentElement?.className.replace('tip', '') ||
-        //     located[index]?.parentElement?.parentElement?.id ||
-        //     located[index]?.parentElement?.id ||
-        //     located[index].classList.value.replace('link-internal ', '');
-        let id = located[index].getAttribute("data-id");
-        //id = id.replace(' ', '');
-        if (text.includes('Description of')) return `@JournalEntry[town]{${text}}`
-        return id !== '' || id ? `@JournalEntry[${id}]{${text}}` : text;
-    })
+
+    if (pack) {
+        for (const element of located) {
+            let id = element.dataset.id;
+            element.dataset.id = id !== '' || id ? `@Compendium[${id}]` : element.text;
+            element.text = id !== '' || id ? `@Compendium[${id}]{${element.text}}` : element.text;
+        }
+    } else {
+        located.replaceWith((index, text) => {
+            let id = located[index].getAttribute("data-id");
+            if (text.includes('Description of')) return `@JournalEntry[town]{${text}}`
+            return id !== '' || id ? `@JournalEntry[${id}]{${text}}` : text;
+        })
+    }
     return $a.html()
 }
 
@@ -64,6 +68,30 @@ const createAndUpdateJournal = (uidToIdMap, createdArray) => async (journalData,
     createdArray.push(newEntry.data._id);
 }
 
+const createJournalEntryComp = async (entityName, rawText, pack, key = "") => await JournalEntry.create(
+    {
+        name: entityName,
+        content: prepareText(rawText, pack),
+        flags: {
+            "EEEG-Importer": {
+                "compendiumEntry": pack,
+                "compdendiumId": key,
+                "journalId": "",
+                "links": [],
+            }
+        }
+    },
+    {
+        pack: pack
+    }
+)
+
+const createAndUpdateJournalComp = (uidToIdMap, createdArray) => async (journalData, pack) => {
+    const newEntry = await createJournalEntryComp(journalData.name, `<div class="EEEG">${journalData.output}</div>`, pack, journalData.key);
+    uidToIdMap.set(journalData.key, newEntry.data._id);
+    createdArray.push(newEntry.data._id);
+}
+
 const parseSecAttributes = (NPCsAsActors, folderId, loadingBar, hasCustomNPCLocation, location) =>
     async (primaryAttribute, attributeType, createActor, createJournal) => {
         let folder, NPCFolder;
@@ -89,54 +117,132 @@ const parseSecAttributes = (NPCsAsActors, folderId, loadingBar, hasCustomNPCLoca
         }
     }
 
-const parseMainAttributes = async (attribute, cityName, attributeData, folderId, createdArray) => {
+const parseSecAttributesComp = (pack, loadingBar) =>
+    async (primaryAttribute, createJournalComp) => {
 
-    let name = attribute === 'start' ? cityName : attribute;
-    name = name === 'town' ? `Description of ${cityName}` : name;
+        for (const secAttribute in primaryAttribute) {
+            if (!primaryAttribute.hasOwnProperty(secAttribute)) continue;
 
-    const newEntry = await createJournalEntry(name, attributeData, folderId);
+            loadingBar();
+
+            await createJournalComp(primaryAttribute[secAttribute], pack);
+        }
+    }
+
+const parseMainAttributes = async (attribute, cityName, attributeData, folderId, createdArray, pack = undefined) => {
+
+    let newEntry;
+    if (pack) {
+        attributeData = tidyMainData(attributeData);
+        newEntry = await createJournalEntryComp(cityName, attributeData, pack);
+    } else {
+        let name = attribute === 'start' ? cityName : attribute;
+        name = name === 'town' ? `Description of ${cityName}` : name;
+        newEntry = await createJournalEntry(name, attributeData, folderId);
+    }
     createdArray.push(newEntry.data._id);
+    mainJournalId = newEntry.data._id;
 }
 
-const iterateJson = async (jsonData, cityName, folderId, NPCsAsActors, loadingBar, parseSecAttr) => {
+const tidyMainData = (data) => {
+    const decoded = decodeHTML(data);
+    const $a = $('<div />', { html: decoded });
+    let result = $a.find("#brief-description");
+    result[1].remove();
+    result = $a.find("#detailed-description");
+    result[0].remove();
+    result = $a.find("[title = 'This changes each time you click.']");
+    result[0].replaceWith(result[0].innerText);
+    return $a.html();
+}
+
+const iterateJson = async (jsonData, cityName, folderId, NPCsAsActors, loadingBar, parseSecAttr, pack = undefined) => {
     let uidToIdMap = new Map(), uidToActorIdMap = new Map();
     let createdArray = [], createdActorsArray = [];
-    let actorCreateMethod = createAndUpdateActor(uidToActorIdMap, createdActorsArray);
-    let journalCreateMethod = createAndUpdateJournal(uidToIdMap, createdArray);
+    let actorCreateMethod;
+    let journalCreateMethod;
+
+    if (pack) {
+        journalCreateMethod = createAndUpdateJournalComp(uidToIdMap, createdArray);
+
+    } else {
+        actorCreateMethod = createAndUpdateActor(uidToActorIdMap, createdActorsArray);
+        journalCreateMethod = createAndUpdateJournal(uidToIdMap, createdArray);
+    }
 
     for (const attribute in jsonData) {
         if (!jsonData.hasOwnProperty(attribute)) continue;
 
         loadingBar();
-        if (typeof jsonData[attribute] !== 'string')
-            await parseSecAttr(jsonData[attribute], attribute, actorCreateMethod, journalCreateMethod);
-
-        else await parseMainAttributes(attribute, cityName, jsonData[attribute], folderId, createdArray);
+        if (typeof jsonData[attribute] !== 'string') {
+            if (pack) {
+                await parseSecAttr(jsonData[attribute], journalCreateMethod);
+            } else
+                await parseSecAttr(jsonData[attribute], attribute, actorCreateMethod, journalCreateMethod);
+        }
+        else await parseMainAttributes(attribute, cityName, jsonData[attribute], folderId, createdArray, pack ? pack : undefined);
     }
     return [[uidToIdMap, createdArray], [uidToActorIdMap, createdActorsArray]]
 }
 
-const secondPassJournals = async (ids, loadingBar) => {
-    const allJournals = game.journal;
-    for (const id of ids[1]) {
-        loadingBar();
-        const journal = allJournals.get(id);
-        const journalClone = JSON.parse(JSON.stringify(journal));
-        journalClone.content = journalClone.content.replace(/@JournalEntry\[(\w+)\]/g, (_0, uid) => `@JournalEntry[${ids[0].get(uid) || ids[0].get(capitalize(uid))}]`);
-        journalClone.content = journalClone.content.replace(/@JournalEntry\[(\w+-\w+-\w+-\w+-\w+)\]/g, (_0, uid) => `@JournalEntry[${ids[0].get(uid)}]`);
-        journalClone.content = journalClone.content.replace(/@JournalEntry\[undefined\]{(.*?)}/g, (_0, name) => name);
-        journalClone.content = journalClone.content.replace(/@JournalEntry\[link-internal\]{(.*?)}/g, (_0, name) => name);
-        journalClone.content = journalClone.content.replace(/@JournalEntry\[tip-([\w-]+)\]{(.*?)}/g, (_0, original, name) => {
-            for (const value of allJournals.values())
-                if (value.data.name.toLowerCase() === name.toLowerCase())
-                    return `@JournalEntry[${value.data._id}]{${name}}`
-            return name;
-        })
-        await journal.update(journalClone);
+const secondPassJournals = async (ids, loadingBar, packName = undefined) => {
+
+    const allJournals = packName ? game.packs : game.journal;
+
+    if (packName) {
+        const pack = game.packs.get(packName);
+        let journals = {};
+
+        pack.contents.forEach((e, i) => {
+            journals[pack.contents[i].id] = pack.contents[i];
+        });
+
+        for (const id of ids[1]) {
+            loadingBar();
+            const journal = journals[id];
+            const journalClone = JSON.parse(JSON.stringify(journal));
+
+            journalClone.flags["EEEG-Importer"].compdendiumId = journalClone._id;
+
+            journalClone.content = journalClone.content.replace(/@Compendium\[(\w+)\]/g, (_0, uid) => `@Compendium[${packName}.${ids[0].get(uid) || ids[0].get(capitalize(uid))}]`);
+
+            journalClone.content = journalClone.content.replace(/@Compendium\[(\w+-\w+-\w+-\w+-\w+)\]/g, (_0, uid) => `@Compendium[${packName}.${ids[0].get(uid)}]`);
+
+            journalClone.content = journalClone.content.replace(/@Compendium\[undefined\]{(.*?)}/g, (_0, name) => name);
+
+            // journalClone.content = journalClone.content.replace(/@Compendium\[link-internal\]{(.*?)}/g, (_0, name) => name);
+
+            journalClone.content = journalClone.content.replace(/@Compendium\[tip-([\w-]+)\]{(.*?)}/g, (_0, original, name) => {
+                for (const value of pack.contents.values())
+                    if (value.data.name.toLowerCase() === name.toLowerCase())
+                        return `@Compendium[${packName}.${value.data._id}]{${name}}`
+                return name;
+            })
+
+            await journal.update(journalClone);
+        }
+    } else {
+        for (const id of ids[1]) {
+            loadingBar();
+            const journal = allJournals.get(id);
+            const journalClone = JSON.parse(JSON.stringify(journal));
+            journalClone.content = journalClone.content.replace(/@JournalEntry\[(\w+)\]/g, (_0, uid) => `@JournalEntry[${ids[0].get(uid) || ids[0].get(capitalize(uid))}]`);
+            journalClone.content = journalClone.content.replace(/@JournalEntry\[(\w+-\w+-\w+-\w+-\w+)\]/g, (_0, uid) => `@JournalEntry[${ids[0].get(uid)}]`);
+            journalClone.content = journalClone.content.replace(/@JournalEntry\[undefined\]{(.*?)}/g, (_0, name) => name);
+            journalClone.content = journalClone.content.replace(/@JournalEntry\[link-internal\]{(.*?)}/g, (_0, name) => name);
+            journalClone.content = journalClone.content.replace(/@JournalEntry\[tip-([\w-]+)\]{(.*?)}/g, (_0, original, name) => {
+                for (const value of allJournals.values())
+                    if (value.data.name.toLowerCase() === name.toLowerCase())
+                        return `@JournalEntry[${value.data._id}]{${name}}`
+                return name;
+            })
+            await journal.update(journalClone);
+        }
     }
 }
 
 const secondPassActors = async (ids) => {
+
     const allActors = game.actors;
     const allJournals = game.journal;
     for (const id of ids[1]) {
@@ -155,6 +261,7 @@ const secondPassActors = async (ids) => {
         actorClone.data.details.biography.value = replaceText;
         await actor.update(actorClone);
     }
+
 }
 
 const getTownSize = (jsonData) => {
@@ -166,157 +273,6 @@ const getTownSize = (jsonData) => {
         if (typeof jsonData[attribute] !== 'string') townSize += Object.keys(jsonData[attribute]).length * 2;
     }
     return townSize;
-}
-
-const prepareTownData = async (jsonData, townName, loadingBar, jsonRoadData = {}) => {
-
-    loadingBar();
-
-    let mainJournalId = "1001";
-    /* create town object from start and town text */
-    let townData = {
-        "town": {
-            ["1001"]: {
-                output: jsonData.start + "/n" + jsonData.town,
-                name: townName,
-                key: "1001"
-            }
-        }
-    };
-
-    /* merge jsons */
-    if (Object.keys(jsonRoadData["roads"]).length !== 0) {
-        let roadData = {
-            "roads": {
-
-            }
-        };
-        Object.keys(jsonRoadData["roads"]).forEach(key => {
-            roadData["roads"][key] = {
-                output: jsonRoadData["roads"][key].description + jsonRoadData["roads"][key].features,
-                name: jsonRoadData["roads"][key].name,
-                key: jsonRoadData["roads"][key].key
-            }
-
-        });
-        mergeObject(jsonData, roadData);
-
-    }
-    mergeObject(jsonData, townData);
-    delete jsonData.start;
-
-    const flatData = {};
-
-    /* flatten the json to make key lookup easier */
-    Object.keys(jsonData).forEach(cat => {
-        if (Object.hasOwn(jsonData, cat)) {
-            Object.assign(flatData, jsonData[cat]);
-        }
-    });
-
-    /* create compendium pack if it doesn't exist */
-    let compendium = game.packs.get(`world.${townName}`);
-    if (!compendium) {
-        compendium = await CompendiumCollection.createCompendium({ name: townName, label: townName, type: "JournalEntry" });
-    }
-
-    const parser = new DOMParser();
-    const newData = [];
-    const originalData = [];
-
-    /* loop through each place/npc/deity etc */
-    Object.keys(flatData).forEach(key => {
-
-        loadingBar();
-
-
-
-        const html = parser.parseFromString(flatData[key].output, "text/html");
-        const elements = $(html).find(".link-internal");
-        const eeegLinks = [];
-
-        for (const el of elements) {
-            if (el.dataset.objectType === undefined) continue;
-
-            eeegLinks.push(el.dataset.id);
-
-            /* if the found link is not in the flatData we need to add it */
-            if (!Object.keys(flatData).includes(el.dataset.id)) {
-                let id = el.dataset.id;
-                let newEntry = {
-                    [id]: {
-                        name: el.innerText,
-                        key: el.dataset.id,
-                        output: el.title,
-                        type: el.dataset.objectType
-                    }
-                }
-                Object.assign(flatData, newEntry);
-
-                let journal = {
-                    content: newEntry[id].output,
-                    name: newEntry[id].name,
-                    flags: {
-                        "EEEG-Importer": {
-                            "compendiumEntry": compendium.collection,
-                            "id": newEntry[id].key,
-                            "links": [],
-                        }
-                    }
-                };
-                newData.push(journal);
-            }
-
-            $(el).text(`...@Compendium[${compendium.collection}.${el.dataset.id}]`);
-            // $(el).append(`@Compendium[${compendium.collection}.${el.dataset.id}]`);
-            el.dataset.id = `@Compendium[${compendium.collection}.${el.dataset.id}]`;
-        }
-
-        let content = html.body.innerHTML;
-
-        let journal = {
-            content: content,
-            name: flatData[key].name,
-            flags: {
-                "EEEG-Importer": {
-                    "compendiumEntry": compendium.collection,
-                    "id": flatData[key].key,
-                    "links": eeegLinks,
-                }
-            }
-        };
-        originalData.push(journal);
-    });
-
-    /* now we have all the objects lets turn them into journal entries */
-    let allData = originalData.concat(newData);
-    const newEntries = await JournalEntry.createDocuments(allData, { pack: compendium.collection });
-
-    for (let entry of newEntries) {
-
-        const eeegId = entry.getFlag("EEEG-Importer", "id");
-        flatData[eeegId].foundryLink = entry.id;
-    }
-
-    let updates = [];
-    for (let entry of newEntries) {
-        loadingBar();
-
-        let content = entry.data.content;
-        const links = entry.getFlag("EEEG-Importer", "links");
-        for (const link of links) {
-            const linkRegex = new RegExp(link, 'g');
-            let fvttLink = flatData[link].foundryLink;
-            content = content.replace(linkRegex, fvttLink);
-        }
-
-        updates.push({ content: content, _id: entry.id });
-    };
-    await JournalEntry.updateDocuments(updates, { pack: compendium.collection });
-
-    mainJournalId = flatData[mainJournalId].foundryLink;
-    game.journal.importFromCompendium(compendium, mainJournalId);
-    ui.notifications.info("Your city has been imported successfully RWK");
 }
 
 const createCity = async (rawText, NPCsAsActors, NPCsAsCompendia, hasCustomNPCLocation, location, rawRoadText) => {
@@ -331,22 +287,57 @@ const createCity = async (rawText, NPCsAsActors, NPCsAsCompendia, hasCustomNPCLo
     // const jsonData = JSON.parse(rawText);
     const jsonData = testData;
     // const jsonRoadData = JSON.parse(rawRoadText);
-    // const jsonRoadData = testRoadData;
+    const jsonRoadData = testRoadData;
+
+    /* merge jsons */
+    if (Object.keys(jsonRoadData["roads"]).length !== 0) {
+        let roadData = {
+            "roads": {}
+        };
+        Object.keys(jsonRoadData["roads"]).forEach(key => {
+            roadData["roads"][key] = {
+                output: jsonRoadData["roads"][key].description + jsonRoadData["roads"][key].features,
+                name: jsonRoadData["roads"][key].name,
+                key: jsonRoadData["roads"][key].key
+            }
+        });
+        mergeObject(jsonData, roadData);
+    }
+
     const loadingBar = loading('Importing city.')(0)(getTownSize(jsonData) - 1);
     const townName = getTownName(jsonData);
 
-    // if (NPCsAsCompendia) {
-    //     prepareTownData(jsonData, townName, loadingBar, jsonRoadData);
-    // } else {
-    const mainFolder = await Folder.create({ name: townName, type: 'JournalEntry', parent: null });
-    const secAttrParser = parseSecAttributes(NPCsAsActors, mainFolder.data._id, loadingBar, hasCustomNPCLocation, location);
+    let ids;
+    let mainFolder = null;
 
-    const ids = await iterateJson(jsonData, townName, mainFolder.data._id, NPCsAsActors, loadingBar, secAttrParser);
-    ids[0][0].set('town', `Description of ${townName}`);
+    if (NPCsAsCompendia) {
+        jsonData.town = jsonData.start + jsonData.town;
+        delete jsonData.start;
 
-    await secondPassJournals(ids[0], loadingBar);
-    if (NPCsAsActors) await secondPassActors(ids[1]);
-    // }
+        /* create compendium pack if it doesn't exist */
+        let compendium = game.packs.get(`world.${townName}`);
+        if (!compendium) {
+            compendium = await CompendiumCollection.createCompendium({ name: townName, label: townName, type: "JournalEntry" });
+        }
+        const secAttrParser = parseSecAttributesComp(compendium.collection, loadingBar);
+
+        ids = await iterateJson(jsonData, townName, undefined, NPCsAsActors, loadingBar, secAttrParser, compendium.collection);
+        ids[0][0].set('town', `Description of ${townName}`);
+
+        await secondPassJournals(ids[0], loadingBar, compendium.collection);
+
+        await game.journal.importFromCompendium(compendium, mainJournalId);
+
+    } else {
+        mainFolder = await Folder.create({ name: townName, type: 'JournalEntry', parent: null });
+        const secAttrParser = parseSecAttributes(NPCsAsActors, mainFolder.data._id, loadingBar, hasCustomNPCLocation, location);
+
+        ids = await iterateJson(jsonData, townName, mainFolder.data._id, NPCsAsActors, loadingBar, secAttrParser);
+        ids[0][0].set('town', `Description of ${townName}`);
+
+        await secondPassJournals(ids[0], loadingBar);
+        if (NPCsAsActors) await secondPassActors(ids[1]);
+    }
 
     ui.notifications.info("Your city has been imported successfully");
 }
