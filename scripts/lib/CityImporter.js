@@ -18,7 +18,7 @@ const prepareText = (rawText, pack = false) => {
     if (pack) {
         for (const element of located) {
             let id = element.dataset.id;
-            element.dataset.id = id !== '' || id ? `@Compendium[${id}]` : element.text;
+            element.dataset.id = id !== '' || id ? `${id}` : element.text;
             element.text = id !== '' || id ? `@Compendium[${id}]{${element.text}}` : element.text;
         }
     } else {
@@ -209,6 +209,8 @@ const secondPassJournals = async (ids, loadingBar, packName = undefined) => {
             journalClone.content = journalClone.content.replace(/@Compendium\[(\w+-\w+-\w+-\w+-\w+)\]/g, (_0, uid) => `@Compendium[${packName}.${ids[0].get(uid)}]`);
 
             journalClone.content = journalClone.content.replace(/@Compendium\[undefined\]{(.*?)}/g, (_0, name) => name);
+
+            journalClone.content = journalClone.content.replace(/data-id="(\w+-\w+-\w+-\w+-\w+)"/g, (_0, uid) => `data-id=\"${packName}.${ids[0].get(uid)}\"`);
 
             // journalClone.content = journalClone.content.replace(/@Compendium\[link-internal\]{(.*?)}/g, (_0, name) => name);
 
