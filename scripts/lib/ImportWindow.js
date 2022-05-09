@@ -16,7 +16,7 @@ export default class ImportWindow extends Application {
         return {
             ...super.defaultOptions,
             id: "md-importer",
-            template: "modules/EEEG-Importer/templates/importer.html",
+            template: "modules/rwk-eeeg-importer/templates/importer.html",
             resizable: false,
             height: "auto",
             width: 400,

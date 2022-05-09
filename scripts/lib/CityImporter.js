@@ -73,7 +73,7 @@ const createJournalEntryComp = async (entityName, rawText, pack, key = "") => aw
         name: entityName,
         content: prepareText(rawText, pack),
         flags: {
-            "EEEG-Importer": {
+            "rwk-eeeg-importer": {
                 "compendiumEntry": pack,
                 "compdendiumId": key,
                 "journalId": "",
@@ -202,7 +202,7 @@ const secondPassJournals = async (ids, loadingBar, packName = undefined) => {
             const journal = journals[id];
             const journalClone = JSON.parse(JSON.stringify(journal));
 
-            journalClone.flags["EEEG-Importer"].compdendiumId = journalClone._id;
+            journalClone.flags["rwk-eeeg-importer"].compdendiumId = journalClone._id;
 
             journalClone.content = journalClone.content.replace(/@Compendium\[(\w+)\]/g, (_0, uid) => `@Compendium[${packName}.${ids[0].get(uid) || ids[0].get(capitalize(uid))}]`);
 
